@@ -104,7 +104,7 @@ client.on("messageCreate", async (message) => {
 
     // `.tr` must be used as a reply
     if (!message.reference?.messageId) {
-        await message.reply("Reply to a message using `.tr`.");
+        await message.reply("Reply to a message using `.tr`");
         
         return;
     }
