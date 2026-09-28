@@ -136,7 +136,7 @@ client.on("messageCreate", async (message) => {
     // Language code must be exactly two letters.
     if (sourceLanguage && !/^[A-Z]{2}$/.test(sourceLanguage)) {
         await message.reply(
-            "Please use a two-letter language code, e.g. `.tr PL`.",
+            "Please use a two-letter language code, e.g. `.tr PL`",
         );
         return;
     }
@@ -144,7 +144,7 @@ client.on("messageCreate", async (message) => {
     // `.tr` / `.tr <lang>` must be used as a reply.
     if (!message.reference?.messageId) {
         await message.reply(
-            "Reply to a message using `.tr`.",
+            "Reply to a message using `.tr` or `.tr <language code>`, e.g. `.tr PL`",
         );
         return;
     }
