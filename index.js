@@ -269,7 +269,6 @@ client.on("messageCreate", async (message) => {
             await message.reply(
                 "Translation failed. Check the language code and try again.",
             ).catch(() => null);
-        }
     }
 });
 
