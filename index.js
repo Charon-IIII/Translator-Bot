@@ -12,7 +12,6 @@ const client = new Client({
     ],
 });
 
-// The DeepL SDK selects the free endpoint for keys ending in :fx.
 const translator = new deepl.Translator(process.env.DEEPL_API_KEY);
 
 const TARGET_LANGUAGE = "EN-US";
@@ -66,10 +65,13 @@ async function getWebhook(channel) {
 
 /**
  * Translate into English.
- * DeepL automatically detects the source language.
+ *
+ * If sourceLanguage is provided, DeepL uses that language.
+ * Otherwise, DeepL automatically detects the source language.
  */
-async function translate(text) {
-    const cacheKey = `${TARGET_LANGUAGE}:${text}`;
+async function translate(text, sourceLanguage = null) {
+    const source = sourceLanguage || "AUTO";
+    const cacheKey = `${source}:${TARGET_LANGUAGE}:${text}`;
 
     const cached = translationCache.get(cacheKey);
 
@@ -77,11 +79,16 @@ async function translate(text) {
         return cached.result;
     }
 
-    const result = await translator.translateText(text, null, TARGET_LANGUAGE);
+    const result = await translator.translateText(
+        text,
+        sourceLanguage,
+        TARGET_LANGUAGE,
+    );
 
     const value = {
         text: result.text,
-        detectedLanguage: result.detectedSourceLang,
+        detectedLanguage:
+            result.detectedSourceLang || sourceLanguage,
     };
 
     translationCache.set(cacheKey, {
@@ -96,43 +103,87 @@ client.on("messageCreate", async (message) => {
     if (message.author.bot || message.webhookId) return;
     if (!message.guild) return;
 
-    // The ONLY command is `.tr`
-    if (message.content.trim().toLowerCase() !== ".tr") {
-        
+    const command = message.content.trim();
+
+    /*
+     * Supported commands:
+     *
+     * .tr       → automatically detect source language
+     * .tr pl    → manually specify Polish
+     * .tr de    → manually specify German
+     * .tr PL    → also works
+     */
+    const parts = command.split(/\s+/);
+
+    if (parts[0].toLowerCase() !== ".tr") {
         return;
     }
 
-    // `.tr` must be used as a reply
+    // Only `.tr` or `.tr <language>` are valid.
+    if (parts.length > 2) {
+        await message.reply(
+            "Use `.tr` or `.tr <language code>` to translate a message",
+        );
+        return;
+    }
+
+    // Optional manually specified source language.
+    const sourceLanguage =
+        parts.length === 2
+            ? parts[1].toUpperCase()
+            : null;
+
+    // Language code must be exactly two letters.
+    if (sourceLanguage && !/^[A-Z]{2}$/.test(sourceLanguage)) {
+        await message.reply(
+            "Please use a two-letter language code, e.g. `.tr PL`.",
+        );
+        return;
+    }
+
+    // `.tr` / `.tr <lang>` must be used as a reply.
     if (!message.reference?.messageId) {
-        await message.reply("Reply to a message using `.tr`");
-        
+        await message.reply(
+            "Reply to a message using `.tr`.",
+        );
         return;
     }
 
-    // Per-user cooldown
-    const lastUse = cooldowns.get(message.author.id) || 0;
+    // Per-user cooldown.
+    const lastUse =
+        cooldowns.get(message.author.id) || 0;
 
-    const remaining = COOLDOWN_MS - (Date.now() - lastUse);
+    const remaining =
+        COOLDOWN_MS -
+        (Date.now() - lastUse);
 
     if (remaining > 0) {
         await message.reply(
-            `Please wait ${Math.ceil(remaining / 1000)} seconds.`,);
-
+            `Please wait ${Math.ceil(
+                remaining / 1000,
+            )} seconds.`,
+        );
         return;
     }
 
-    cooldowns.set(message.author.id, Date.now());
+    cooldowns.set(
+        message.author.id,
+        Date.now(),
+    );
 
     try {
-        const targetMessage = await message.channel.messages.fetch(
-            message.reference.messageId,
-        );
+        const targetMessage =
+            await message.channel.messages.fetch(
+                message.reference.messageId,
+            );
 
-        const text = targetMessage.content.trim();
+        const text =
+            targetMessage.content.trim();
 
         if (!text) {
             const warning = await message.reply(
-                "That message contains no translatable text.",);
+                "That message contains no translatable text.",
+            );
 
             setTimeout(() => {
                 warning.delete().catch(() => {});
@@ -143,52 +194,82 @@ client.on("messageCreate", async (message) => {
 
         if (text.length > MAX_LENGTH) {
             await message.reply(
-                `That message exceeds the ${MAX_LENGTH}-character limit.`,);
-            
+                `That message exceeds the ${MAX_LENGTH}-character limit.`,
+            );
             return;
         }
 
-        const translated = await translate(text);
-
-        // Already English → do nothing.
-        if (translated.detectedLanguage?.toUpperCase().startsWith("EN")) {
+        /*
+         * If the user explicitly specified English as the source,
+         * there is nothing to translate.
+         */
+        if (
+            sourceLanguage &&
+            sourceLanguage.startsWith("EN")
+        ) {
+            await message.delete().catch(() => {});
             return;
         }
 
-        const webhook = await getWebhook(message.channel);
+        const translated = await translate(
+            text,
+            sourceLanguage,
+        );
+
+        /*
+         * With autodetection, don't translate messages that
+         * DeepL identified as English.
+         */
+        if (
+            !sourceLanguage &&
+            translated.detectedLanguage
+                ?.toUpperCase()
+                .startsWith("EN")
+        ) {
+            await message.delete().catch(() => {});
+            return;
+        }
+
+        const webhook =
+            await getWebhook(message.channel);
 
         const displayName =
             targetMessage.member?.displayName ||
             targetMessage.author.globalName ||
             targetMessage.author.username;
 
-        // Remove `.tr`
+        // Remove `.tr` command.
         await message.delete().catch(() => {});
 
-        // Re-send translation through webhook
+        // Re-send translation through webhook.
         await webhook.send({
-            username: `${displayName} • Translated`,
+            username:
+                `${displayName} • Translated`,
 
-            avatarURL: targetMessage.author.displayAvatarURL({
-                size: 256,
-            }),
+            avatarURL:
+                targetMessage.author.displayAvatarURL({
+                    size: 256,
+                }),
 
             content:
                 `${translated.text}\n` +
-                `-# ${translated.detectedLanguage.toUpperCase()} → EN-US • ${targetMessage.url}`,
+                `-# ${translated.detectedLanguage.toUpperCase()} → ${TARGET_LANGUAGE} • ${targetMessage.url}`,
 
             allowedMentions: {
                 parse: [],
             },
         });
     } catch (error) {
-        console.error("Translation error:", error);
+        console.error(
+            "Translation error:",
+            error,
+        );
 
-        await message
-            .reply(
-                "Translation failed. Check the DeepL key and bot permissions.",
-            )
-            .catch(() => null);
+        const warning =
+            await message.reply(
+                "Translation failed. Check the language code and try again.",
+            ).catch(() => null);
+        }
     }
 });
 
